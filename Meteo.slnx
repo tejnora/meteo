@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Meteo.Core/Meteo.Core.csproj" />
+    <Project Path="src/Meteo.Viewer/Meteo.Viewer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Meteo.Core.Tests/Meteo.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Meteo.GeoPrep/Meteo.GeoPrep.csproj" />
+  </Folder>
+</Solution>

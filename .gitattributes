@@ -1,0 +1,5 @@
+* text=auto eol=crlf
+*.bin binary
+*.bz2 binary
+*.tif binary
+*.png binary
