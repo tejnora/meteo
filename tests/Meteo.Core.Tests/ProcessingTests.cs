@@ -73,6 +73,18 @@ public class ScheduleTests
     }
 
     [Fact]
+    public void ArchiveUrlsUseDynamicalLayout()
+    {
+        var eu = IconModel.IconEu.FromArchive("https://data.source.coop/dynamical/dwd-icon-grib/");
+        var run = new DateTime(2026, 7, 11, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Equal("https://data.source.coop/dynamical/dwd-icon-grib/icon-eu/regular-lat-lon/2026-07-11T00/t_2m/" +
+                     "icon-eu_europe_regular-lat-lon_single-level_2026071100_012_T_2M.grib2.bz2", eu.SingleLevelUrl(run, 12, "t_2m"));
+        Assert.Equal("https://data.source.coop/dynamical/dwd-icon-grib/icon-eu/regular-lat-lon/2026-07-11T00/hhl/" +
+                     "icon-eu_europe_regular-lat-lon_time-invariant_2026071100_61_HHL.grib2.bz2", eu.TimeInvariantUrl(run, 61, "hhl"));
+        Assert.StartsWith("https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/t_2m/", IconModel.IconEu.SingleLevelUrl(run, 12, "t_2m"));
+    }
+
+    [Fact]
     public void EveningStartsTomorrowWithThreeFullDays()
     {
         var dir = Directory.CreateTempSubdirectory().FullName;

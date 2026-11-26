@@ -29,6 +29,23 @@ public sealed class IconModel
     /// <summary>ICON-D2 time-invariant files contain a "000" step token.</summary>
     public required bool TimeInvariantStepToken { get; init; }
 
+    /// <summary>Index of the lowest HHL half level (= ground); used when the directory cannot be listed.</summary>
+    public required int SurfaceHalfLevel { get; init; }
+
+    /// <summary>
+    /// Root of an archive with the dynamical.org layout (<c>{root}/{model}/regular-lat-lon/{yyyy-MM-ddTHH}/{variable}/</c>),
+    /// e.g. https://data.source.coop/dynamical/dwd-icon-grib. Null = DWD open data (last ~24 h only).
+    /// </summary>
+    public string? ArchiveRoot { get; init; }
+
+    /// <summary>The same model read from an archive of DWD files instead of the open-data server.</summary>
+    public IconModel FromArchive(string root) => new()
+    {
+        Name = Name, Directory = Directory, Prefix = Prefix, UpperCaseVariables = UpperCaseVariables, RunInterval = RunInterval,
+        MaxHourlyLead = MaxHourlyLead, MaxLead = MaxLead, SingleLevelToken = SingleLevelToken,
+        TimeInvariantStepToken = TimeInvariantStepToken, SurfaceHalfLevel = SurfaceHalfLevel, ArchiveRoot = root.TrimEnd('/'),
+    };
+
     /// <summary>Variable with the base of (shallow) convective clouds: D2 "hbas_sc", EU "hbas_con".</summary>
     public string CloudBaseVariable => Directory == "icon-d2" ? "hbas_sc" : "hbas_con";
 
@@ -37,18 +54,20 @@ public sealed class IconModel
     public static IconModel IconD2 { get; } = new()
     {
         Name = "ICON-D2", Directory = "icon-d2", Prefix = "icon-d2_germany", UpperCaseVariables = false,
-        RunInterval = 3, MaxHourlyLead = 48, MaxLead = 48, SingleLevelToken = true, TimeInvariantStepToken = true,
+        RunInterval = 3, MaxHourlyLead = 48, MaxLead = 48, SingleLevelToken = true, TimeInvariantStepToken = true, SurfaceHalfLevel = 66,
     };
 
     public static IconModel IconEu { get; } = new()
     {
         Name = "ICON-EU", Directory = "icon-eu", Prefix = "icon-eu_europe", UpperCaseVariables = true,
-        RunInterval = 6, MaxHourlyLead = 78, MaxLead = 120, SingleLevelToken = false, TimeInvariantStepToken = false,
+        RunInterval = 6, MaxHourlyLead = 78, MaxLead = 120, SingleLevelToken = false, TimeInvariantStepToken = false, SurfaceHalfLevel = 61,
     };
 
     private string V(string variable) => UpperCaseVariables ? variable.ToUpperInvariant() : variable.ToLowerInvariant();
     private static string Run(DateTime runUtc) => runUtc.ToString("yyyyMMddHH", CultureInfo.InvariantCulture);
-    private string Dir(DateTime runUtc, string variable) => $"{BaseUrl}/{Directory}/grib/{runUtc:HH}/{variable.ToLowerInvariant()}";
+    private string Dir(DateTime runUtc, string variable) => ArchiveRoot is null
+        ? $"{BaseUrl}/{Directory}/grib/{runUtc:HH}/{variable.ToLowerInvariant()}"
+        : $"{ArchiveRoot}/{Directory}/regular-lat-lon/{runUtc.ToString("yyyy-MM-dd'T'HH", CultureInfo.InvariantCulture)}/{variable.ToLowerInvariant()}";
 
     public string VariableDirectoryUrl(DateTime runUtc, string variable) => Dir(runUtc, variable) + "/";
 

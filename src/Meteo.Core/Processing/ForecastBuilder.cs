@@ -38,16 +38,18 @@ public sealed class ForecastBuilder
         var wanted = WantedValidTimes(now);
         Report(progress, "Hledám poslední běhy modelů…", 0, 1);
 
-        var runD2 = await FindLatestRunAsync(IconModel.IconD2, now, ct);
-        var runEu = await FindLatestRunAsync(IconModel.IconEu, now, ct);
+        var d2 = _opt.IconD2;
+        var eu = _opt.IconEu;
+        var runD2 = d2 is null ? null : _opt.IconD2Run ?? await FindLatestRunAsync(d2, now, ct);
+        var runEu = _opt.IconEuRun ?? await FindLatestRunAsync(eu, now, ct);
         int LeadOf(DateTime valid, DateTime? r) => r is { } x ? (int)Math.Round((valid - x).TotalHours) : -1;
 
         var plan = new List<(DateTime Valid, IconModel Model, DateTime Run, int Lead)>();
         foreach (var valid in wanted)
         {
             int l2 = LeadOf(valid, runD2), le = LeadOf(valid, runEu);
-            if (IconModel.IconD2.HasLead(l2)) plan.Add((valid, IconModel.IconD2, runD2!.Value, l2));
-            else if (IconModel.IconEu.HasLead(le)) plan.Add((valid, IconModel.IconEu, runEu!.Value, le));
+            if (d2 is not null && d2.HasLead(l2)) plan.Add((valid, d2, runD2!.Value, l2));
+            else if (eu.HasLead(le)) plan.Add((valid, eu, runEu!.Value, le));
         }
         if (plan.Count == 0) throw new InvalidOperationException("Na DWD nejsou k dispozici žádná data pro požadované hodiny.");
 
@@ -56,25 +58,25 @@ public sealed class ForecastBuilder
         // those cells are filled from ICON-EU for the same valid time.
         VerticalInfo? vD2 = null, vEu = null;
         bool[]? gap = null;
-        if (plan.Any(p => p.Model == IconModel.IconD2))
+        if (plan.Any(p => p.Model == d2))
         {
             Report(progress, "ICON-D2: výšky modelových hladin (HHL)…", 0, 1);
-            vD2 = await GetVerticalAsync(IconModel.IconD2, runD2!.Value, null, ct);
+            vD2 = await GetVerticalAsync(d2!, runD2!.Value, null, ct);
             var ground = vD2.Hhl[vD2.SurfaceHalfLevel];
             gap = ground.Select(float.IsNaN).ToArray();
             if (!gap.Any(g => g) || runEu is null) gap = null;
         }
-        if (plan.Any(p => p.Model == IconModel.IconEu) || gap != null)
+        if (plan.Any(p => p.Model == eu) || gap != null)
         {
             Report(progress, "ICON-EU: výšky modelových hladin (HHL)…", 0, 1);
-            var mask = plan.Any(p => p.Model == IconModel.IconEu) ? null : gap;
-            vEu = await GetVerticalAsync(IconModel.IconEu, runEu!.Value, mask, ct);
+            var mask = plan.Any(p => p.Model == eu) ? null : gap;
+            vEu = await GetVerticalAsync(eu, runEu!.Value, mask, ct);
         }
 
         Report(progress, $"Hladiny pro vítr: ICON-D2 {vD2?.NeededLevels.Count ?? 0}, ICON-EU {vEu?.NeededLevels.Count ?? 0}", 0, 1);
         // 12 instantaneous single-level fields + 4 time-averaged/accumulated ones + u,v per level
         int FilesPerHour(VerticalInfo v) => 16 + 2 * v.NeededLevels.Count;
-        int total = plan.Sum(p => p.Model == IconModel.IconD2 ? FilesPerHour(vD2!) + (gap != null ? FilesPerHour(vEu!) : 0) : FilesPerHour(vEu!));
+        int total = plan.Sum(p => p.Model == d2 ? FilesPerHour(vD2!) + (gap != null ? FilesPerHour(vEu!) : 0) : FilesPerHour(vEu!));
         // the first hour of each continuous block also needs the previous step of the 4 averaged fields
         int blocks = plan.Where((p, k) => k == 0 || plan[k - 1].Model != p.Model || plan[k - 1].Lead != p.Model.PreviousLead(p.Lead)).Count();
         total += 4 * blocks * (gap != null ? 2 : 1);
@@ -87,16 +89,16 @@ public sealed class ForecastBuilder
             ct.ThrowIfCancellationRequested();
             var local = TimeZoneInfo.ConvertTimeFromUtc(p.Valid, _opt.TimeZone);
             void Tick() => Report(progress, $"{p.Model.Name} {p.Run:dd.MM. HH}Z +{p.Lead} h → {local:ddd dd.MM. HH:mm}", Interlocked.Increment(ref done), total);
-            var hour = await BuildHourAsync(p.Model, p.Run, p.Lead, p.Valid, p.Model == IconModel.IconD2 ? vD2! : vEu!, Tick, ct);
+            var hour = await BuildHourAsync(p.Model, p.Run, p.Lead, p.Valid, p.Model == d2 ? vD2! : vEu!, Tick, ct);
 
-            if (p.Model == IconModel.IconD2 && gap != null)
+            if (p.Model == d2 && gap != null)
             {
                 int le = LeadOf(p.Valid, runEu);
-                if (IconModel.IconEu.HasLead(le))
+                if (eu.HasLead(le))
                 {
                     void TickEu() => Report(progress, $"ICON-EU doplnění okraje → {local:ddd dd.MM. HH:mm}", Interlocked.Increment(ref done), total);
-                    var eu = await BuildHourAsync(IconModel.IconEu, runEu!.Value, le, p.Valid, vEu!, TickEu, ct);
-                    FillGaps(hour, eu, gap);
+                    var euHour = await BuildHourAsync(eu, runEu!.Value, le, p.Valid, vEu!, TickEu, ct);
+                    FillGaps(hour, euHour, gap);
                 }
             }
             run.Hours.Add(hour);
@@ -200,10 +202,14 @@ public sealed class ForecastBuilder
         }
         else
         {
-            var names = await _client.ListAsync(model.VariableDirectoryUrl(runUtc, "hhl"), ct);
-            var rx = new Regex(@"regular-lat-lon_time-invariant_\d{10}_(?:000_)?(\d+)_hhl", RegexOptions.IgnoreCase);
-            surface = names.Select(n => rx.Match(n)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(0).Max();
-            if (surface == 0) throw new InvalidOperationException($"{model.Name}: HHL files not found.");
+            surface = 0;
+            if (model.ArchiveRoot is null) // the archive (object storage) has no directory index
+            {
+                var names = await _client.ListAsync(model.VariableDirectoryUrl(runUtc, "hhl"), ct);
+                var rx = new Regex(@"regular-lat-lon_time-invariant_\d{10}_(?:000_)?(\d+)_hhl", RegexOptions.IgnoreCase);
+                surface = names.Select(n => rx.Match(n)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).DefaultIfEmpty(0).Max();
+            }
+            if (surface == 0) surface = model.SurfaceHalfLevel;
 
             hhl = new Dictionary<int, float[]>();
             // Download from the ground upwards until the full level is above maxH everywhere.

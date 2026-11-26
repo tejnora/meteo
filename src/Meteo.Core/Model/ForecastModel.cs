@@ -47,6 +47,12 @@ public sealed class ForecastOptions
     /// 0 = use all adjacent levels (most accurate, roughly twice the download volume).
     /// </summary>
     public double MinLevelSpacing { get; init; } = 250;
+    /// <summary>ICON-D2 source; null = use ICON-EU only (e.g. for archive replays, ICON-D2 is not archived).</summary>
+    public Dwd.IconModel? IconD2 { get; init; } = Dwd.IconModel.IconD2;
+    public Dwd.IconModel IconEu { get; init; } = Dwd.IconModel.IconEu;
+    /// <summary>Use these runs instead of searching the latest published ones (archive replays).</summary>
+    public DateTime? IconD2Run { get; init; }
+    public DateTime? IconEuRun { get; init; }
     /// <summary>Folder for processed 5 km fields (not raw GRIB).</summary>
     public string CacheDirectory { get; init; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Meteo", "cache");
