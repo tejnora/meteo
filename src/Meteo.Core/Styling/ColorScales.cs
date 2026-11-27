@@ -70,6 +70,24 @@ public sealed record ColorScale(string Title, string Unit, double[] Levels, stri
         new[] { "#2C2D54", "#47407A", "#6A4C93", "#9A5A8E", "#C66B7C", "#E5855F", "#F4A548", "#F9C74F", "#FBE38E", "#FFF7D1" },
         new[] { "0,25", "0,5", "1", "1,5", "2", "3", "4", "5", "6", "≥ 7 kWh/m²" });
 
+    /// <summary>Thermal quality score of the planning view (≈ W* reduced by low ceiling, lee and spreading), m/s.</summary>
+    public static ColorScale FlightQuality { get; } = new("Kvalita termiky", "m/s",
+        new[] { 1.0, 1.6, 2.2 },
+        new[] { "#FFF1A8", "#FDB54E", "#E4570B" },
+        new[] { "slabá termika", "dobrá termika", "výborná termika" });
+
+    public const string BlueThermalSymbol = "#1E6FD9";
+    public const string CumulusSymbolFill = "#FFFFFF";
+    public const string CumulusSymbolStroke = "#5B6B7C";
+    public const string StratocumulusSymbolFill = "#9AA3AD";
+    public const string StratocumulusSymbolStroke = "#4A525B";
+    public const string CumulonimbusSymbolFill = "#3E4652";
+    public const string CumulonimbusSymbolStroke = "#1E232A";
+    public const string LightningFill = "#FFD400";
+    public const string OverdevelopmentStroke = "#C2185B";
+    public const string ConvergenceStroke = "#D35400";
+    public const string LeeHatch = "#6A3D9A";
+
     public const string CumulusFill = "#59FFFFFF";
     public const string CumulusStroke = "#FFFFFF";
 

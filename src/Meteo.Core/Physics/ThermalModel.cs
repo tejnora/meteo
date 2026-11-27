@@ -18,6 +18,10 @@ public sealed class ThermalFields
     public required float[] Ceiling { get; init; }
     /// <summary>1 = cumulus thermals, 0 = blue thermals (smooth transition 0..1).</summary>
     public required float[] Cumulus { get; init; }
+    /// <summary>Estimated share of the sky covered by cumulus (0..1): low cloud cover where cumulus thermals form. Empty if not computed.</summary>
+    public float[] CumulusCover { get; init; } = Array.Empty<float>();
+    /// <summary>Convective precipitation in the model (0..1): 0.7 = showers, 1 = thunderstorm, 0 = none. Empty if not computed.</summary>
+    public float[] Storm { get; init; } = Array.Empty<float>();
     /// <summary>Risk (0..1) that cumulus overdevelop into showers / thunderstorms.</summary>
     public required float[] Overdevelopment { get; init; }
     /// <summary>Risk (0..1) that cumulus spread out into a stratocumulus deck and shade the ground.</summary>
@@ -100,6 +104,8 @@ public sealed class ThermalModel
         var cuC = new float[nc];
         var odC = new float[nc];
         var spC = new float[nc];
+        var ccC = new float[nc];
+        var stC = new float[nc];
         for (int k = 0; k < nc; k++)
         {
             float gnd = hsurf[k];
@@ -108,7 +114,9 @@ public sealed class ThermalModel
             topC[k] = top;
 
             float lcl = gnd + 125f * Math.Max(0, t2[k] - td2[k]);
-            bool modelCu = float.IsFinite(cuBaseM[k]) && cuFrac[k] > 0.2f;
+            // the model convective cloud base counts as a cumulus base only near the top of the thermals; ICON-EU "hbas_con"
+            // also reports bases of mid/high-level (elevated) convection, e.g. 7–9 km, which have nothing to do with thermals
+            bool modelCu = float.IsFinite(cuBaseM[k]) && cuFrac[k] > 0.2f && cuBaseM[k] <= top + 500f && cuBaseM[k] > gnd;
             float bas = modelCu ? cuBaseM[k] : lcl;
             float cu = modelCu ? 1f : Math.Clamp((top - lcl) / 200f, 0f, 1f); // LCL below the thermal top → cumulus
             baseC[k] = bas;
@@ -121,6 +129,10 @@ public sealed class ThermalModel
 
             float sp = cu * Math.Clamp((clcl[k] - 30f) / 50f, 0f, 1f);
             spC[k] = float.IsFinite(sp) ? sp : 0f;
+
+            float cc = cu * Math.Clamp(clcl[k] / 100f, 0f, 1f);
+            ccC[k] = float.IsFinite(cc) ? cc : 0f;
+            stC[k] = thunder[k] > 0f ? 1f : shower[k] > 0.1f ? 0.7f : 0f;
         }
 
         // Boundary-layer mean wind (map oriented) from the 10 m wind and the levels inside the mixed layer.
@@ -138,6 +150,8 @@ public sealed class ThermalModel
         var cuF = Up(cuC);
         var odF = Up(odC);
         var spF = Up(spC);
+        var ccF = Up(ccC);
+        var stF = Up(stC);
         var uF = Up(ubl);
         var vF = Up(vbl);
 
@@ -196,7 +210,7 @@ public sealed class ThermalModel
         return new ThermalFields
         {
             Grid = g, CoarseGrid = _coarse,
-            WStar = wstar, Top = topF, CloudBase = cloudBase, Ceiling = ceiling, Cumulus = cuF,
+            WStar = wstar, Top = topF, CloudBase = cloudBase, Ceiling = ceiling, Cumulus = cuF, CumulusCover = ccF, Storm = stF,
             Overdevelopment = odF, Spreading = spF, Lee = lee, Convergence = conv, HeatFlux = heat, Radiation = radiation,
             StepHours = hour.StepHours,
         };

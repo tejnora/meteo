@@ -162,6 +162,140 @@ public sealed class LayerBuilder
         return layer;
     }
 
+    /// <summary>Symbol lattice spacing of the planning view (m).</summary>
+    public double SymbolSpacing { get; init; } = 6000;
+
+    /// <summary>
+    /// Thermal quality score (m/s) of the planning view: W* reduced where the usable height above the terrain is low
+    /// (&lt; 800 m), in the lee and where cumulus spread out and shade the ground. 0 where there are no usable thermals.
+    /// Overdevelopment is not included – it is shown by symbols and an outline (validation: frequent false alarms).
+    /// </summary>
+    public static float[] FlightQuality(Physics.ThermalFields f, float[] elevation)
+    {
+        var q = new float[f.WStar.Length];
+        for (int k = 0; k < q.Length; k++) q[k] = FlightQualityAt(f, k, elevation[k]);
+        return q;
+    }
+
+    /// <inheritdoc cref="FlightQuality"/>
+    public static float FlightQualityAt(Physics.ThermalFields f, int k, float elevation)
+    {
+        float w = f.WStar[k], ceil = f.Ceiling[k];
+        if (!float.IsFinite(w) || !float.IsFinite(ceil) || !float.IsFinite(elevation)) return 0;
+        float pen = 0.6f * Math.Clamp((800f - (ceil - elevation)) / 500f, 0f, 1f)
+                  + 1.0f * Math.Clamp((f.Lee[k] - 0.25f) / 0.5f, 0f, 1f)
+                  + 0.7f * Math.Clamp((f.Spreading[k] - 0.4f) / 0.4f, 0f, 1f);
+        return Math.Max(0, w - pen);
+    }
+
+    /// <summary>Combined planning view: thermal quality, cloud symbols, overdevelopment and convergence outlines.</summary>
+    public VectorLayer BuildFlightPlan(Physics.ThermalFields f, float[] elevation, string subtitle)
+    {
+        var g = f.Grid;
+        int step = Math.Max(1, (int)Math.Round(SymbolSpacing / g.CellSize));
+        var layer = new VectorLayer
+        {
+            Title = new LayerKind(LayerType.FlightPlan).DisplayName, Subtitle = subtitle, Opacity = 0.7,
+            SymbolSpacing = step * g.CellSize,
+        };
+
+        AddFilledContours(layer, FlightQuality(f, elevation), ColorScale.FlightQuality, g);
+
+        // lee: diagonal hatching (sink, broken thermals) – denser for strong lee
+        foreach (var (level, spacing) in new[] { (0.35, 10.0), (0.65, 5.0) })
+        {
+            var leeGeom = Contour(f.Lee, level, g);
+            if (!leeGeom.IsEmpty) layer.Polygons.Add(new StyledPolygon(leeGeom, null, Value: level, Hatch: ColorScale.LeeHatch, HatchSpacing: spacing, HatchBackslash: true));
+        }
+
+        // convergence: the opposite of lee (rising air) – hatching in the other direction, denser for strong convergence
+        var conv = f.Convergence.Select(v => v * 1e4f).ToArray();
+        foreach (var (level, spacing) in new[] { (1.0, 10.0), (2.0, 5.0) })
+        {
+            var convGeom = Contour(conv, level, f.CoarseGrid);
+            if (!convGeom.IsEmpty)
+                layer.Polygons.Add(new StyledPolygon(convGeom, null, Value: level, Hatch: ColorScale.ConvergenceStroke, HatchSpacing: spacing));
+        }
+        var odGeom = Contour(f.Overdevelopment, 0.6, g);
+        if (!odGeom.IsEmpty) layer.Polygons.Add(new StyledPolygon(odGeom, null, ColorScale.OverdevelopmentStroke, 2.2, Dashed: true, Value: 0.6));
+
+        // cloud symbols: one per step × step window (window means), the most significant phenomenon wins
+        var cells = new Dictionary<(int I, int J), (SymbolKind? Kind, int Amount)>();
+        for (int J = 0; J * step < g.Ny; J++)
+            for (int I = 0; I * step < g.Nx; I++)
+            {
+                double sumOd = 0, sumSp = 0, sumCu = 0, sumCc = 0, sumSt = 0; int n = 0, usable = 0, flyable = 0;
+                for (int j = J * step; j < Math.Min(g.Ny, (J + 1) * step); j++)
+                    for (int i = I * step; i < Math.Min(g.Nx, (I + 1) * step); i++)
+                    {
+                        int k = j * g.Nx + i;
+                        if (!float.IsFinite(elevation[k]) || !float.IsFinite(f.WStar[k])) continue;
+                        n++;
+                        sumOd += f.Overdevelopment[k];
+                        sumSp += f.Spreading[k];
+                        sumCu += f.Cumulus[k];
+                        if (f.CumulusCover.Length > k) sumCc += f.CumulusCover[k];
+                        if (f.Storm.Length > k) sumSt += f.Storm[k];
+                        if (float.IsFinite(f.Ceiling[k])) usable++;
+                        if (FlightQualityAt(f, k, elevation[k]) >= 1.0f) flyable++;  // same threshold as "weak thermals" in the fill
+                    }
+                if (n < step * step / 2) continue; // mostly outside the data area
+                double storm = sumSt / n;
+                SymbolKind? kind = storm >= 0.35 ? SymbolKind.Cumulonimbus
+                    : sumOd / n >= 0.6 ? SymbolKind.Congestus
+                    : sumSp / n >= 0.5 ? SymbolKind.Stratocumulus
+                    : sumCu / n >= 0.5 && usable >= n * 0.3 ? SymbolKind.Cumulus
+                    : flyable >= n * 0.3 ? SymbolKind.Blue
+                    : null;
+                // cumulus amount from the covered sky share: < 20 % few, < 40 % scattered, more = many (beyond ~55 % → Sc)
+                double cover = sumCc / n;
+                // amount is meaningful only for Cu (cover) and Cb (showers / thunder); 1 otherwise so it does not count as a change
+                int amount = kind switch
+                {
+                    SymbolKind.Cumulonimbus => storm >= 0.85 ? 2 : 1,
+                    SymbolKind.Cumulus => f.CumulusCover.Length == 0 ? 2 : cover < 0.2 ? 1 : cover < 0.4 ? 2 : 3,
+                    _ => 1,
+                };
+                cells[(I, J)] = (kind, amount);
+            }
+
+        // majority filter over 3 × 3 windows: removes the salt-and-pepper changes of the cloud type between neighbouring
+        // windows (noise of the forecast, not a real boundary); storms are always kept – they matter most
+        foreach (var ((I, J), (kind, amount)) in cells)
+        {
+            SymbolKind? k2 = kind;
+            int a2 = amount;
+            if (kind != SymbolKind.Cumulonimbus)
+            {
+                var around = new List<(SymbolKind? Kind, int Amount)>(9);
+                for (int dj = -1; dj <= 1; dj++)
+                    for (int di = -1; di <= 1; di++)
+                        if (cells.TryGetValue((I + di, J + dj), out var c)) around.Add(c);
+                var major = around.GroupBy(c => c.Kind).OrderByDescending(gr => gr.Count()).First();
+                if (major.Key != kind && major.Count() * 2 > around.Count && major.Key != SymbolKind.Cumulonimbus) k2 = major.Key;
+                if (k2 == SymbolKind.Cumulus)
+                {
+                    var amounts = around.Where(c => c.Kind == SymbolKind.Cumulus).Select(c => c.Amount).OrderBy(x => x).ToList();
+                    a2 = amounts.Count > 0 ? amounts[amounts.Count / 2] : 2;
+                }
+                else if (k2 != kind) a2 = 1;
+            }
+            if (k2 is { } sk)
+                layer.Symbols.Add(new MapSymbol(g.X0 + (I + 0.5) * step * g.CellSize, g.Y0 + (J + 0.5) * step * g.CellSize, sk, I, J, a2));
+        }
+
+        AddLegend(layer, ColorScale.FlightQuality);
+        layer.Legend.Add(new LegendItem(ColorScale.BlueThermalSymbol, "modrý kroužek – bezoblačná termika (bez kumulů)"));
+        layer.Legend.Add(new LegendItem(ColorScale.CumulusSymbolFill, "Cu – kumuly: 1 obláček málo, 2 rozptýleně, 3 hodně"));
+        layer.Legend.Add(new LegendItem(ColorScale.StratocumulusSymbolFill, "Sc – rozlévání, stínění"));
+        layer.Legend.Add(new LegendItem(ColorScale.CumulusSymbolFill, "věžovitý Cu – přerůstá (riziko přeháněk)"));
+        layer.Legend.Add(new LegendItem(ColorScale.CumulonimbusSymbolFill, "Cb – přeháňky (déšť), s bleskem bouřky"));
+        layer.Legend.Add(new LegendItem(ColorScale.LeeHatch, "šrafování /// : závětří – klesání (hustší = silné)"));
+        layer.Legend.Add(new LegendItem(ColorScale.OverdevelopmentStroke, "čárkovaně: riziko přerůstání ≥ 60 %"));
+        layer.Legend.Add(new LegendItem(ColorScale.ConvergenceStroke, "šrafování \\\\\\ : konvergence – stoupavý pás (hustší = silná)"));
+        return layer;
+    }
+
     public VectorLayer BuildSolarDaily(float[] kwh, GridDefinition fineGrid, string subtitle)
     {
         var layer = new VectorLayer { Title = new LayerKind(LayerType.SolarDaily).DisplayName, Subtitle = subtitle, Opacity = 0.75 };

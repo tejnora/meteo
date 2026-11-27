@@ -13,7 +13,8 @@ public static class Analysis
     private static readonly TimeZoneInfo Tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Prague");
 
     public sealed record Matched(DateOnly Day, string Flight, DateTime MidUtc, double Lat, double Lon, double Climb, double Top, double Bottom,
-        double WStar, double WStarMax2Km, double FcTop, double FcBase, double FcCeiling, double Cumulus, double Overdev, double Elev, double Lead);
+        double WStar, double WStarMax2Km, double FcTop, double FcBase, double FcCeiling, double Cumulus, double Overdev, double Elev, double Lead,
+        double Spreading = double.NaN, double Lee = double.NaN, double Storm = double.NaN, double Cover = double.NaN, double Quality = double.NaN);
 
     public static void Run(ValidationContext ctx, IReadOnlyList<DateOnly> days)
     {
@@ -96,7 +97,14 @@ public static class Analysis
                 var m = new Matched(day, r.S("flight"), mid, lat, lon, r.D("climb"), r.D("top"), r.D("bottom"),
                     L(fa.WStar, fb.WStar), wmax, L(fa.Top, fb.Top), L(fa.CloudBase, fb.CloudBase), Lerp(ceilA[k], ceilB[k], w),
                     L(fa.Cumulus, fb.Cumulus), L(fa.Overdevelopment, fb.Overdevelopment), surf.Elevation[k],
-                    (mid - a.RunUtc).TotalHours);
+                    (mid - a.RunUtc).TotalHours)
+                {
+                    Spreading = L(fa.Spreading, fb.Spreading), Lee = L(fa.Lee, fb.Lee),
+                    Storm = fa.Storm.Length > k ? L(fa.Storm, fb.Storm) : double.NaN,
+                    Cover = fa.CumulusCover.Length > k ? L(fa.CumulusCover, fb.CumulusCover) : double.NaN,
+                    Quality = Lerp(Meteo.Core.Vector.LayerBuilder.FlightQualityAt(fa, k, surf.Elevation[k]),
+                                   Meteo.Core.Vector.LayerBuilder.FlightQualityAt(fb, k, surf.Elevation[k]), w),
+                };
                 if (double.IsFinite(m.WStar)) dayMatched.Add(m);
             }
             matched.AddRange(dayMatched);
@@ -133,9 +141,9 @@ public static class Analysis
         }
 
         // ---- matched thermals → CSV ----
-        var csv = new StringBuilder("day,flight,mid_local,lat,lon,climb,bottom,top,wstar,wstar_max2km,fc_top,fc_cloudbase,fc_ceiling,cumulus,overdev,elev,lead_h\n");
+        var csv = new StringBuilder("day,flight,mid_local,lat,lon,climb,bottom,top,wstar,wstar_max2km,fc_top,fc_cloudbase,fc_ceiling,cumulus,overdev,elev,lead_h,spreading,lee,storm,cover,quality\n");
         foreach (var m in matched)
-            csv.Append(CultureInfo.InvariantCulture, $"{m.Day:yyyy-MM-dd},{m.Flight},{ToLocal(m.MidUtc):HH:mm:ss},{m.Lat:0.0000},{m.Lon:0.0000},{m.Climb:0.00},{m.Bottom:0},{m.Top:0},{m.WStar:0.00},{m.WStarMax2Km:0.00},{m.FcTop:0},{m.FcBase:0},{m.FcCeiling:0},{m.Cumulus:0.00},{m.Overdev:0.00},{m.Elev:0},{m.Lead:0}\n");
+            csv.Append(CultureInfo.InvariantCulture, $"{m.Day:yyyy-MM-dd},{m.Flight},{ToLocal(m.MidUtc):HH:mm:ss},{m.Lat:0.0000},{m.Lon:0.0000},{m.Climb:0.00},{m.Bottom:0},{m.Top:0},{m.WStar:0.00},{m.WStarMax2Km:0.00},{m.FcTop:0},{m.FcBase:0},{m.FcCeiling:0},{m.Cumulus:0.00},{m.Overdev:0.00},{m.Elev:0},{m.Lead:0},{m.Spreading:0.00},{m.Lee:0.00},{m.Storm:0.00},{m.Cover:0.00},{m.Quality:0.00}\n");
         File.WriteAllText(ctx.PathFor("thermals_matched.csv"), csv.ToString());
 
         // ---- overall statistics ----
@@ -179,6 +187,30 @@ public static class Analysis
             }
             File.WriteAllText(ctx.PathFor("bins.csv"), "day,hour,n,climb_median,wstar_median,top_p90,fc_ceiling\n" +
                 string.Concat(bins.Select(b => FormattableString.Invariant($"{b.Day:yyyy-MM-dd},{b.Hour},{b.N},{b.Climb:0.00},{b.WStar:0.00},{b.Top90:0},{b.Ceil:0}\n"))));
+            // ---- planning view factors: does the climb really drop where the forecast says so? ----
+            // residual = climb − median climb of the same day and hour (removes the difference between days)
+            var dayHourMedian = matched.GroupBy(m => (m.Day, ToLocal(m.MidUtc).Hour)).ToDictionary(g => g.Key, g => Median(g.Select(m => m.Climb)));
+            double Res(Matched m) => m.Climb - dayHourMedian[(m.Day, ToLocal(m.MidUtc).Hour)];
+            var factorRows = new StringBuilder("factor,group,n,climb_median,residual_median\n");
+            void Factor(string name, Func<Matched, double> value, params (string Label, double Lo, double Hi)[] groups)
+            {
+                foreach (var (label, lo, hi) in groups)
+                {
+                    var g = matched.Where(m => value(m) is var v && double.IsFinite(v) && v >= lo && v < hi).ToList();
+                    if (g.Count == 0) continue;
+                    factorRows.Append(FormattableString.Invariant($"{name},{label},{g.Count},{Median(g.Select(m => m.Climb)):0.00},{Median(g.Select(Res)):0.00}\n"));
+                }
+            }
+            Factor("quality", m => m.Quality, ("none", -1, 1.0), ("weak", 1.0, 1.6), ("good", 1.6, 2.2), ("excellent", 2.2, 99));
+            Factor("spreading", m => m.Spreading, ("lt30", -1, 0.3), ("30to60", 0.3, 0.6), ("ge60", 0.6, 9));
+            Factor("lee", m => m.Lee, ("lt25", -1, 0.25), ("25to50", 0.25, 0.5), ("ge50", 0.5, 9));
+            Factor("overdev", m => m.Overdev, ("lt30", -1, 0.3), ("30to60", 0.3, 0.6), ("ge60", 0.6, 9));
+            Factor("cover", m => m.Cover, ("lt20", -1, 0.2), ("20to40", 0.2, 0.4), ("ge40", 0.4, 9));
+            Factor("storm", m => m.Storm, ("none", -1, 0.35), ("showers", 0.35, 9));
+            File.WriteAllText(ctx.PathFor("report", "factors.csv"), factorRows.ToString());
+            // suspicious model cloud base far above the dry thermal top
+            overall["cubase_above_top_500"] = matched.Count(m => double.IsFinite(m.FcBase) && m.FcBase > m.FcTop + 500);
+
             var dl = daySummaries.Where(d => d.ContainsKey("climb_median")).ToList();
             if (dl.Count >= 3)
             {

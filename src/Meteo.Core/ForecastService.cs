@@ -79,6 +79,7 @@ public sealed class ForecastService : IDisposable
     public IReadOnlyList<LayerKind> AvailableLayers =>
         new[]
         {
+            new LayerKind(LayerType.FlightPlan),
             new LayerKind(LayerType.ThermalStrength), new LayerKind(LayerType.ThermalCeiling), new LayerKind(LayerType.ThermalEnd),
             new LayerKind(LayerType.Overdevelopment), new LayerKind(LayerType.Spreading),
             new LayerKind(LayerType.Lee), new LayerKind(LayerType.Convergence),
@@ -113,6 +114,8 @@ public sealed class ForecastService : IDisposable
             var local = ToLocal(hour.ValidUtc);
             var subtitle = $"{local:dddd d. M. yyyy HH:mm} · {hour.Model} běh {hour.RunUtc:dd.MM. HH} UTC";
             if ((hour.ValidUtc - hour.RunUtc).TotalHours > IconModel.IconEu.MaxHourlyLead) subtitle += " · krok 3 h (srážky a záření = průměr 3 h)";
+            if (kind.Type == LayerType.FlightPlan)
+                return _layers.BuildFlightPlan(GetThermal(hour), _thermal.Value.Surface.Elevation, subtitle + " · 1 km");
             if (kind.IsThermal) return _layers.BuildThermal(kind, GetThermal(hour), subtitle + " · 1 km");
             return _layers.Build(kind, hour, subtitle);
         });
@@ -203,6 +206,7 @@ public sealed class ForecastService : IDisposable
         string common = $"W* {f.WStar[k]:0.0} m/s · {ceil} · {terrain}";
         return kind.Type switch
         {
+            LayerType.FlightPlan => DescribePlan(f, k, x, y, surf.Elevation[k], common),
             LayerType.Overdevelopment => $"přerůstání {f.Overdevelopment[k] * 100:0} % · {common}",
             LayerType.Spreading => $"rozlití {f.Spreading[k] * 100:0} % · {common}",
             LayerType.Lee => $"závětří {f.Lee[k] * 100:0} % · {common}",
@@ -211,6 +215,31 @@ public sealed class ForecastService : IDisposable
                                         $" · sklon {Math.Acos(Math.Clamp(surf.NormalU[k], -1, 1)) * 180 / Math.PI:0}° · {terrain}",
             _ => $"{common} · tok tepla {f.HeatFlux[k]:0} W/m²",
         };
+    }
+
+    private static string DescribePlan(Physics.ThermalFields f, int k, double x, double y, float elev, string common)
+    {
+        float q = LayerBuilder.FlightQualityAt(f, k, elev);
+        string quality = q >= 2.2f ? "výborná termika" : q >= 1.6f ? "dobrá termika" : q >= 1.0f ? "slabá termika" : "bez použitelné termiky";
+        var parts = new List<string> { quality, common };
+        if (f.CumulusCover.Length > k && float.IsFinite(f.CloudBase[k]))
+        {
+            float cc = f.CumulusCover[k];
+            parts.Add($"Cu {(cc < 0.2f ? "málo" : cc < 0.4f ? "rozptýleně" : "hodně")} (~{Math.Round(cc * 8):0}/8)");
+        }
+        if (f.Spreading[k] >= 0.3f) parts.Add($"rozlití {f.Spreading[k] * 100:0} %");
+        if (f.Storm.Length > k && f.Storm[k] >= 0.35f) parts.Add(f.Storm[k] >= 0.85f ? "BOUŘKY v modelu" : "přeháňky v modelu");
+        if (f.Overdevelopment[k] >= 0.3f) parts.Add($"přerůstání {f.Overdevelopment[k] * 100:0} %");
+        if (f.Lee[k] >= 0.25f) parts.Add($"závětří {f.Lee[k] * 100:0} %");
+        if (ConvergenceAt(f, x, y) is { Length: > 0 } c && f.Convergence[CoarseIndex(f, x, y)] >= 0.5e-4f) parts.Add(c);
+        return string.Join(" · ", parts);
+    }
+
+    private static int CoarseIndex(Physics.ThermalFields f, double x, double y)
+    {
+        var g = f.CoarseGrid;
+        int i = Math.Clamp((int)Math.Floor((x - g.X0) / g.CellSize), 0, g.Nx - 1), j = Math.Clamp((int)Math.Floor((y - g.Y0) / g.CellSize), 0, g.Ny - 1);
+        return j * g.Nx + i;
     }
 
     private static string ConvergenceAt(Physics.ThermalFields f, double x, double y)

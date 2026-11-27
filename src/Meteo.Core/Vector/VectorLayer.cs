@@ -34,6 +34,7 @@ public readonly record struct LayerKind(LayerType Type, int Height = 0)
         LayerType.Convergence => "Konvergence v mezní vrstvě",
         LayerType.SolarRadiation => "Sluneční energie dopadající na terén",
         LayerType.SolarDaily => "Denní součet sluneční energie (07–19 h)",
+        LayerType.FlightPlan => "Plánování letu – termika, oblaka, rizika",
         _ => Type.ToString(),
     };
 }
@@ -43,10 +44,38 @@ public enum LayerType
     CloudLow, CloudMid, CloudHigh, Showers, Wind, Temperature2m,
     ThermalStrength, ThermalCeiling, Overdevelopment, Spreading, ThermalEnd, Lee, Convergence,
     SolarRadiation, SolarDaily,
+    /// <summary>Combined planning view: thermal quality, cloud symbols (Cu / Sc / Cb), overdevelopment and convergence outlines.</summary>
+    FlightPlan,
 }
 
-/// <summary>Colours are "#RRGGBB" strings so the library stays UI-framework neutral.</summary>
-public sealed record StyledPolygon(Geometry Geometry, string? Fill, string? Stroke = null, double StrokeWidth = 1, bool Dashed = false, double Value = double.NaN);
+public enum SymbolKind
+{
+    /// <summary>Usable thermals without cumulus (blue thermals).</summary>
+    Blue,
+    /// <summary>Cumulus thermals.</summary>
+    Cumulus,
+    /// <summary>Cumulus spreading out into stratocumulus (shading).</summary>
+    Stratocumulus,
+    /// <summary>Towering cumulus (congestus): overdevelopment risk without precipitation yet.</summary>
+    Congestus,
+    /// <summary>Showers / thunderstorms in the model.</summary>
+    Cumulonimbus,
+}
+
+/// <summary>
+/// Point symbol drawn at a constant screen size. <see cref="I"/>/<see cref="J"/> are indices on the regular symbol lattice
+/// so a renderer can thin the symbols out consistently when zoomed out (e.g. keep only even indices).
+/// <see cref="Amount"/> is 1–3 for cumulus (few / scattered / many clouds); for cumulonimbus 1 = showers, 2 = thunderstorm.
+/// </summary>
+public sealed record MapSymbol(double X, double Y, SymbolKind Kind, int I, int J, int Amount = 1);
+
+/// <summary>
+/// A styled polygon. Colours are "#RRGGBB" strings so the library stays UI-framework neutral.
+/// <see cref="Hatch"/> = colour of diagonal hatching drawn over the area (keeps the layer below visible);
+/// <see cref="HatchSpacing"/> is the distance of the hatch lines in screen pixels; <see cref="HatchBackslash"/> draws "\" instead of "/".
+/// </summary>
+public sealed record StyledPolygon(Geometry Geometry, string? Fill, string? Stroke = null, double StrokeWidth = 1, bool Dashed = false, double Value = double.NaN,
+    string? Hatch = null, double HatchSpacing = 8, bool HatchBackslash = false);
 
 public sealed record StyledLine(Geometry Geometry, string Stroke, double Width, bool Dashed = false);
 
@@ -74,5 +103,8 @@ public sealed class VectorLayer
     public List<StyledPolygon> Polygons { get; } = new();
     public List<StyledLine> Lines { get; } = new();
     public List<WindArrow> Arrows { get; } = new();
+    public List<MapSymbol> Symbols { get; } = new();
+    /// <summary>Distance of neighbouring symbols on their lattice (m).</summary>
+    public double SymbolSpacing { get; init; }
     public List<LegendItem> Legend { get; } = new();
 }

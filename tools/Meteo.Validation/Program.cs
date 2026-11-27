@@ -42,6 +42,31 @@ if (command == "thermals") // diagnostics: thermals of IGC files
     return;
 }
 
+if (command == "diag") // diagnostics: hourly means over the model grid of the boundary-layer fields
+{
+    foreach (var day in days)
+    {
+        var svc = ctx.Service(day);
+        if (svc?.Current is null) continue;
+        Console.WriteLine($"== {day}");
+        foreach (var h in svc.Current.Hours.OrderBy(h => h.ValidUtc))
+        {
+            var gnd = h.Get(Meteo.Core.Model.FieldNames.ModelTerrain)!;
+            var mh = h.Get(Meteo.Core.Model.FieldNames.MixingHeight)!;
+            var top = h.Get(Meteo.Core.Model.FieldNames.DryConvTop)!;
+            var shf = h.Get(Meteo.Core.Model.FieldNames.SensibleHeat)!;
+            double M(Func<int, float> f) { double s = 0; int n = 0; for (int k = 0; k < gnd.Length; k++) { var v = f(k); if (float.IsFinite(v)) { s += v; n++; } } return n > 0 ? s / n : double.NaN; }
+            int nTop = Enumerable.Range(0, gnd.Length).Count(k => float.IsFinite(top[k]));
+            var th = svc.GetThermal(h);
+            double W = th.WStar.Where(float.IsFinite).DefaultIfEmpty(0).Average();
+            int above = Enumerable.Range(0, gnd.Length).Count(k => top[k] > gnd[k] + 30);
+            double thTop = th.Top.Zip(th.Grid.Nx > 0 ? Meteo.Core.Geo.SurfaceData.Default.Elevation : th.Top, (t, e) => t - e).Where(float.IsFinite).DefaultIfEmpty(0).Average();
+            Console.WriteLine($"{h.ValidUtc:HH}Z  mh {M(k => mh[k]),5:0}  htopdc {M(k => top[k]),5:0} gnd {M(k => gnd[k]),4:0} (htop>gnd+30: {100.0 * above / gnd.Length:0}%)  shf {M(k => shf[k]),4:0}  W* {W:0.00}  zi(1km) {thTop:0}");
+        }
+    }
+    return;
+}
+
 foreach (var day in days)
 {
     if (command is "all" or "replay") await Replay.RunAsync(ctx, day);

@@ -102,7 +102,7 @@
 
         <!-- map -->
         <Grid Background="#DCE6EE">
-            <map:MapView ReliefLayer="{Binding ReliefLayer}" MeteoLayer="{Binding MeteoLayer}" BorderLayer="{Binding VisibleBorders}"
+            <map:MapView ReliefLayer="{Binding ReliefLayer}" MeteoLayer="{Binding MeteoLayer}" BorderLayer="{Binding VisibleBorders}" TrackLayer="{Binding TrackLayer}"
                          ShowArrows="{Binding ShowArrows}" WorldExtent="{Binding WorldExtent}" PointerWorld="{Binding PointerWorld}" />
 
             <Border Style="{StaticResource OverlayBox}" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False">

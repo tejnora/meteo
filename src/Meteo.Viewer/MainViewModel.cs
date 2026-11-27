@@ -38,6 +38,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var k in _svc.AvailableLayers) Layers.Add(ToItem(k));
         _selectedLayer = Layers[0];
 
+        // optional command line: --igc <file> shows a flight over the forecast
+        var args = Environment.GetCommandLineArgs();
+        int ig = Array.IndexOf(args, "--igc");
+        if (ig >= 0 && ig + 1 < args.Length)
+        {
+            try { _flight = FlightTrack.Load(args[ig + 1]); }
+            catch (Exception ex) { Status = "IGC nelze načíst: " + ex.Message; }
+        }
+
         if (_svc.LoadCached()) LoadDays();
         else Status = "Žádná uložená předpověď – klikněte na „Aktualizovat“.";
     }
@@ -101,6 +110,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly VectorLayer _reliefLayer;
 
     [ObservableProperty] private VectorLayer? _meteoLayer;
+    [ObservableProperty] private VectorLayer? _trackLayer;
+    private readonly FlightTrack? _flight;
+
+    /// <summary>Flight track with the part flown within ±30 min of the shown hour highlighted.</summary>
+    private void RefreshTrack()
+    {
+        if (_flight is null || SelectedDay is null || CurrentHour is null) { TrackLayer = null; return; }
+        var local = SelectedDay.Date.ToDateTime(new TimeOnly(CurrentHour.Value, 0), DateTimeKind.Unspecified);
+        var utc = TimeZoneInfo.ConvertTimeToUtc(local, _svc.Options.TimeZone);
+        TrackLayer = _flight.ToLayer(utc.AddMinutes(-30), utc.AddMinutes(30));
+    }
     [ObservableProperty] private bool _showRelief = true;
     [ObservableProperty] private bool _showBorders = true;
     [ObservableProperty] private bool _showArrows = true;
@@ -114,6 +134,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private async void RefreshLayer()
     {
+        RefreshTrack();
         if (SelectedDay is null || CurrentHour is null) { MeteoLayer = null; return; }
         var (kind, day, hour) = (SelectedLayer.Kind, SelectedDay.Date, CurrentHour.Value);
         int req = Interlocked.Increment(ref _layerRequest);
@@ -156,6 +177,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var value = SelectedDay is null || CurrentHour is null ? null
             : _svc.DescribePoint(SelectedLayer.Kind, SelectedDay.Date, CurrentHour.Value, p.X, p.Y);
         PointerInfo = value is null ? pos : $"{pos}   ·   {value}";
+        if (_flight?.Nearest(p.X, p.Y, 1500) is { } fx)
+        {
+            var t = TimeZoneInfo.ConvertTimeFromUtc(fx.Utc, _svc.Options.TimeZone);
+            PointerInfo += $"{Environment.NewLine}let {_flight.Name}: {t:HH:mm} · {fx.Alt:0} m · vario {fx.Vario:+0.0;-0.0} m/s";
+        }
     }
 
     // ---- update ------------------------------------------------------------------------------------------
@@ -218,7 +244,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Days.Clear();
         foreach (var d in _svc.AvailableDays)
             Days.Add(new DayItem(d, d.ToString("ddd d. M.", Cz)));
-        SelectedDay = Days.FirstOrDefault(d => d.Date == prev) ?? Days.FirstOrDefault();
+        SelectedDay = Days.FirstOrDefault(d => d.Date == prev)
+            ?? (_flight is null ? null : Days.FirstOrDefault(d => d.Date == _flight.DateUtc))
+            ?? Days.FirstOrDefault();
         var run = _svc.Current;
         if (run != null)
         {
@@ -272,6 +300,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         LayerType.CloudHigh => new(k, "Vysoká", "Oblačnost"),
         LayerType.Showers => new(k, "Přeháňky a bouřky", "Srážky"),
         LayerType.Temperature2m => new(k, "2 m nad zemí", "Teplota"),
+        LayerType.FlightPlan => new(k, "Plánování letu (vše dohromady)", "Termika"),
         LayerType.ThermalStrength => new(k, "Síla (W*)", "Termika"),
         LayerType.ThermalCeiling => new(k, "Výška / základna Cu", "Termika"),
         LayerType.ThermalEnd => new(k, "Konec termiky (celý den)", "Termika"),

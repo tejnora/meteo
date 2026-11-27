@@ -23,12 +23,16 @@ public static class GeoJsonExporter
         foreach (var p in layer.Polygons)
             fc.Add(GeoJson.Feature(Tx(p.Geometry), ("kind", "polygon"), ("fill", p.Fill), ("stroke", p.Stroke),
                 ("strokeWidth", p.StrokeWidth), ("dashed", p.Dashed), ("value", double.IsNaN(p.Value) ? null : p.Value),
-                ("opacity", layer.Opacity)));
+                ("opacity", layer.Opacity), ("hatch", p.Hatch), ("hatchBackslash", p.HatchBackslash)));
         foreach (var l in layer.Lines)
             fc.Add(GeoJson.Feature(Tx(l.Geometry), ("kind", "line"), ("stroke", l.Stroke), ("strokeWidth", l.Width), ("dashed", l.Dashed)));
         foreach (var a in layer.Arrows)
             fc.Add(GeoJson.Feature(Tx(Factory.CreatePoint(new Coordinate(a.X, a.Y))), ("kind", "wind"),
                 ("speedKmh", Math.Round(a.SpeedKmh, 1)), ("fromDeg", Math.Round(a.FromDirection, 0)), ("u", a.U), ("v", a.V)));
+        foreach (var s in layer.Symbols)
+            fc.Add(GeoJson.Feature(Tx(Factory.CreatePoint(new Coordinate(s.X, s.Y))), ("kind", "symbol"),
+                ("symbol", s.Kind switch { SymbolKind.Blue => "blue", SymbolKind.Cumulus => "Cu", SymbolKind.Stratocumulus => "Sc", _ => "Cb" }),
+                ("i", s.I), ("j", s.J)));
         return fc;
     }
 

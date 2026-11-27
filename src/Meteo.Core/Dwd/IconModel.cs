@@ -60,7 +60,7 @@ public sealed class IconModel
     public static IconModel IconEu { get; } = new()
     {
         Name = "ICON-EU", Directory = "icon-eu", Prefix = "icon-eu_europe", UpperCaseVariables = true,
-        RunInterval = 6, MaxHourlyLead = 78, MaxLead = 120, SingleLevelToken = false, TimeInvariantStepToken = false, SurfaceHalfLevel = 61,
+        RunInterval = 6, MaxHourlyLead = 78, MaxLead = 120, SingleLevelToken = false, TimeInvariantStepToken = false, SurfaceHalfLevel = 75,
     };
 
     private string V(string variable) => UpperCaseVariables ? variable.ToUpperInvariant() : variable.ToLowerInvariant();

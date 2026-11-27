@@ -129,6 +129,32 @@ public class ThermalModelTests
     }
 
     [Fact]
+    public void ModelCloudBaseFarAboveTheThermalsIsNotACumulusBase()
+    {
+        var surf = Surface((i, j) => (300f, Flat, Flat, 1f));
+        var model = new ThermalModel(Coarse, surf);
+        int k = 10 * Fine.Nx + 10;
+        int n = Coarse.Nx * Coarse.Ny;
+
+        // elevated convection with a base at 9 km: dry air (LCL above the top) → blue thermals up to the 1800 m top
+        var high = model.Compute(Hour(d =>
+        {
+            d[FieldNames.CuBase] = Enumerable.Repeat(9000f, n).ToArray();
+            d[FieldNames.CuFraction] = Enumerable.Repeat(1f, n).ToArray();
+        }), Array.Empty<int>());
+        Assert.True(float.IsNaN(high.CloudBase[k]));
+        Assert.Equal(1800f, high.Ceiling[k], 0);
+
+        // a model base just below the thermal top is a real cumulus base
+        var cu = model.Compute(Hour(d =>
+        {
+            d[FieldNames.CuBase] = Enumerable.Repeat(1700f, n).ToArray();
+            d[FieldNames.CuFraction] = Enumerable.Repeat(1f, n).ToArray();
+        }), Array.Empty<int>());
+        Assert.Equal(1700f, cu.CloudBase[k], 0);
+    }
+
+    [Fact]
     public void LeeAppearsDownwindOfARidge()
     {
         // ridge 600 m high at column 8, wind from the west (blowing east, +x) at 10 m/s
